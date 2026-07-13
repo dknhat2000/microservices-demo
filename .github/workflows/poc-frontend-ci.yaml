@@ -1,0 +1,76 @@
+name: "PoC: build, scan, push frontend + bump GitOps manifest"
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/frontend/**'
+      - '.github/workflows/poc-frontend-ci.yaml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  PROJECT_ID: microservices-demo-502308
+  REGION: us-central1
+  REPOSITORY: online-boutique
+  IMAGE: frontend
+
+jobs:
+  build-scan-push:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/353153818225/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider'
+          service_account: 'github-action-runner@microservices-demo-502308.iam.gserviceaccount.com'
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+
+      - name: Set image tag
+        run: echo "TAG=$(echo ${GITHUB_SHA} | cut -c1-12)" >> "$GITHUB_ENV"
+
+      - name: Build frontend image
+        run: |
+          docker build -t "${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE}:${TAG}" src/frontend
+
+      - name: Scan image with Trivy (fail on CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: '${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:${{ env.TAG }}'
+          format: 'table'
+          severity: 'CRITICAL'
+          exit-code: '1'
+
+      - name: Push frontend image
+        run: docker push "${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE}:${TAG}"
+
+      - name: Bump frontend image in helm-chart/values.yaml (GitOps source of truth)
+        run: |
+          IMAGE_REPO="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}"
+          python3 - "$IMAGE_REPO" "$TAG" <<'EOF'
+          import sys, re
+          repo, tag = sys.argv[1], sys.argv[2]
+          path = "helm-chart/values.yaml"
+          text = open(path).read()
+          text = re.sub(r'(frontend:\n(?:.*\n)*?  image:\n    repository: )"[^"]*"', r'\1"%s"' % repo, text, count=1)
+          text = re.sub(r'(frontend:\n(?:.*\n)*?  image:\n    repository: "[^"]*"\n    tag: )"[^"]*"', r'\1"%s"' % tag, text, count=1)
+          open(path, "w").write(text)
+          EOF
+          git diff helm-chart/values.yaml
+
+      - name: Commit + push GitOps bump (bot commit, direct to main)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm-chart/values.yaml
+          git commit -m "chore(poc-ci): bump frontend image to ${TAG}" || echo "nothing to commit"
+          git push origin HEAD:main
