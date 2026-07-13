@@ -1,0 +1,118 @@
+name: "PoC CI — build/scan/push all services + GitOps bump"
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - '.github/workflows/poc-ci.yaml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write     # bump job writes the image tag back to git (GitOps source of truth)
+  id-token: write     # Workload Identity Federation (keyless auth to GCP)
+
+env:
+  PROJECT_ID: microservices-demo-502308
+  REGION: us-central1
+  REPO: online-boutique
+  WIF_PROVIDER: projects/353153818225/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
+  WIF_SA: github-action-runner@microservices-demo-502308.iam.gserviceaccount.com
+
+jobs:
+  build:
+    name: "build+scan+push ${{ matrix.name }}"
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: adservice,             context: src/adservice }
+          - { name: cartservice,           context: src/cartservice/src }
+          - { name: checkoutservice,       context: src/checkoutservice }
+          - { name: currencyservice,       context: src/currencyservice }
+          - { name: emailservice,          context: src/emailservice }
+          - { name: frontend,              context: src/frontend }
+          - { name: loadgenerator,         context: src/loadgenerator }
+          - { name: paymentservice,        context: src/paymentservice }
+          - { name: productcatalogservice, context: src/productcatalogservice }
+          - { name: recommendationservice, context: src/recommendationservice }
+          - { name: shippingservice,       context: src/shippingservice }
+    steps:
+      - uses: actions/checkout@v6
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+      - name: Set shared image tag (short git SHA)
+        run: echo "TAG=$(echo ${GITHUB_SHA} | cut -c1-12)" >> "$GITHUB_ENV"
+      - name: Build ${{ matrix.name }}
+        run: |
+          IMG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${{ matrix.name }}"
+          docker build -t "${IMG}:${TAG}" "${{ matrix.context }}"
+      - name: Trivy scan ${{ matrix.name }} (report-only for now; hard gate in Phase 3)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: '${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ matrix.name }}:${{ env.TAG }}'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '0'   # <- change to '1' to make it a blocking gate (Phase 3: DevSecOps)
+      - name: Push ${{ matrix.name }}
+        run: |
+          IMG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${{ matrix.name }}"
+          docker push "${IMG}:${TAG}"
+
+  mirror-redis:
+    name: "mirror redis:alpine into our AR"
+    runs-on: ubuntu-24.04
+    steps:
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+      - name: Mirror redis (pin by digest) into AR — removes the Docker Hub dependency
+        run: |
+          SRC="redis:alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005"
+          DST="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/redis:alpine"
+          docker pull "$SRC"
+          docker tag "$SRC" "$DST"
+          docker push "$DST"
+
+  bump:
+    name: "GitOps write-back: repoint chart to our AR + shared tag"
+    needs: [build, mirror-redis]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+      - name: Set shared image tag (short git SHA)
+        run: echo "TAG=$(echo ${GITHUB_SHA} | cut -c1-12)" >> "$GITHUB_ENV"
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+      - name: Repoint Helm chart to our Artifact Registry
+        run: |
+          AR="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}"
+          export AR TAG
+          yq -i '.images.repository = strenv(AR)' helm-chart/values.yaml
+          yq -i '.images.tag = strenv(TAG)' helm-chart/values.yaml
+          # use our mirrored redis instead of Docker Hub
+          yq -i '.cartDatabase.inClusterRedis.publicRepository = false' helm-chart/values.yaml
+          git diff helm-chart/values.yaml
+      - name: Commit + push GitOps bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm-chart/values.yaml
+          git commit -m "chore(poc-ci): deploy all services from our AR @ ${TAG}" || echo "nothing to commit"
+          git push origin HEAD:main
