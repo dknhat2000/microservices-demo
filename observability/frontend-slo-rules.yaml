@@ -1,0 +1,73 @@
+# SLO recording + alerting rules for the frontend, derived from the blackbox Probe.
+#
+# SLOs (28-day window):
+#   - Availability: 99.9% of probes succeed        -> error budget = 0.1%
+#   - Latency:      99% of probes complete < 500ms
+#
+# Recording rules precompute the SLIs; the alerts use a multi-window burn-rate
+# approach (fast 1h burn + slower 6h burn) so we page on genuine budget burn,
+# not on a single blip. Scoped to the PoC's single frontend probe target.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: frontend-slo
+  namespace: monitoring
+  labels:
+    release: kube-prom-stack
+spec:
+  groups:
+    - name: frontend-slo.sli
+      interval: 30s
+      rules:
+        # Availability SLI over several windows (ratio of successful probes).
+        - record: slo:frontend_availability:ratio_rate5m
+          expr: avg_over_time(probe_success{service="frontend"}[5m])
+        - record: slo:frontend_availability:ratio_rate1h
+          expr: avg_over_time(probe_success{service="frontend"}[1h])
+        - record: slo:frontend_availability:ratio_rate6h
+          expr: avg_over_time(probe_success{service="frontend"}[6h])
+        - record: slo:frontend_availability:ratio_rate28d
+          expr: avg_over_time(probe_success{service="frontend"}[28d])
+        # Latency SLI: fraction of probes under the 500ms objective over 5m.
+        # (probe_duration_seconds < bool 0.5) yields 1/0 per sample; avg_over_time
+        # of that subquery is the fraction of probes that met the objective.
+        - record: slo:frontend_latency_under_500ms:ratio_rate5m
+          expr: avg_over_time((probe_duration_seconds{service="frontend"} < bool 0.5)[5m:30s])
+        # Remaining availability error budget (fraction of the 0.1% budget left, 28d).
+        - record: slo:frontend_availability:error_budget_remaining_ratio
+          expr: |
+            (slo:frontend_availability:ratio_rate28d - 0.999) / (1 - 0.999)
+    - name: frontend-slo.alerts
+      rules:
+        - alert: FrontendAvailabilityFastBurn
+          # ~14.4x burn rate over 1h AND 5m -> would exhaust the 28d budget in ~2 days.
+          expr: |
+            (1 - slo:frontend_availability:ratio_rate1h) > (14.4 * 0.001)
+            and
+            (1 - slo:frontend_availability:ratio_rate5m) > (14.4 * 0.001)
+          for: 2m
+          labels:
+            severity: critical
+            slo: frontend-availability
+          annotations:
+            summary: "Frontend availability SLO fast burn"
+            description: "Frontend probe failure rate is burning the 99.9% availability error budget >14x too fast (1h & 5m windows)."
+        - alert: FrontendAvailabilitySloBreached
+          # Simpler, demo-friendly: availability over the last 5m has dropped below 99.9%.
+          expr: slo:frontend_availability:ratio_rate5m < 0.999
+          for: 2m
+          labels:
+            severity: warning
+            slo: frontend-availability
+          annotations:
+            summary: "Frontend availability below 99.9% (5m)"
+            description: "5m availability is {{ $value | humanizePercentage }} (SLO 99.9%)."
+        - alert: FrontendDown
+          expr: probe_success{service="frontend"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            slo: frontend-availability
+          annotations:
+            summary: "Frontend probe failing"
+            description: "The blackbox probe to the frontend has been failing for >1m."

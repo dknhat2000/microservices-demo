@@ -1,0 +1,73 @@
+# kube-prometheus-stack values tuned for GKE Autopilot (PoC).
+#
+# Autopilot forbids: DaemonSets using hostPath/hostNetwork/hostPID (node-exporter),
+# and creating resources in the managed kube-system namespace (the kubelet/coreDNS
+# helper Services). It also doesn't expose control-plane components for scraping.
+# So we disable all of those and keep: Prometheus, Grafana, Alertmanager,
+# kube-state-metrics, and the kube-apiserver scrape (all Autopilot-compatible).
+#
+# Container CPU/mem (cadvisor/kubelet) metrics are therefore not collected here —
+# use `kubectl top` (metrics-server) or GKE's own monitoring for right-sizing.
+# Selectors are opened up so Prometheus discovers ALL ServiceMonitors/PodMonitors/
+# Probes/PrometheusRules cluster-wide, not just this release's labelled ones.
+
+nodeExporter:
+  enabled: false
+
+kubelet:
+  enabled: false
+coreDns:
+  enabled: false
+kubeDns:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeApiServer:
+  enabled: true
+
+prometheusOperator:
+  kubeletService:
+    enabled: false
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    retention: 7d
+    resources:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        memory: 1500Mi
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+
+grafana:
+  # PoC-only admin password. Not a secret worth protecting for a throwaway demo cluster;
+  # for anything real this would come from a Secret / External Secrets, not values.
+  adminPassword: poc-admin-2026
+  defaultDashboardsTimezone: browser
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi

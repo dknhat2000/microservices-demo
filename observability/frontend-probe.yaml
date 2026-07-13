@@ -1,0 +1,23 @@
+# Blackbox Probe targeting the in-cluster frontend Service. Prometheus (via the
+# Operator) turns this into a scrape job against blackbox-exporter, which HTTP-GETs
+# the frontend every 15s. Yields probe_success (availability SLI) and
+# probe_duration_seconds / probe_http_duration_seconds (latency SLI).
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: frontend-availability
+  namespace: monitoring
+  labels:
+    release: kube-prom-stack
+spec:
+  interval: 15s
+  module: http_2xx
+  prober:
+    url: blackbox-exporter-prometheus-blackbox-exporter.monitoring.svc:9115
+  targets:
+    staticConfig:
+      static:
+        - http://frontend.default.svc.cluster.local:80/
+      labels:
+        service: frontend
+        slo: frontend-availability
