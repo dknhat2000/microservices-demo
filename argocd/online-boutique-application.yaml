@@ -23,3 +23,11 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=false
+  # GKE Autopilot's default-resources mutating webhook rewrites container resource
+  # requests/limits (e.g. bumps memory, injects ephemeral-storage) on every apply,
+  # which otherwise causes a permanent diff against git. Not a real drift to act on.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/template/spec/containers/0/resources
