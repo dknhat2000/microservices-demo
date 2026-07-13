@@ -27,8 +27,8 @@ metadata:
   {{- end }}
 ---
 {{- end }}
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: {{ .Values.frontend.name }}
   namespace: {{ .Release.Namespace }}
@@ -38,6 +38,17 @@ spec:
   selector:
     matchLabels:
       app: {{ .Values.frontend.name }}
+  # Mesh-free canary: GKE Autopilot blocks self-hosted service meshes (see PoC notes), so
+  # this splits traffic purely via stable/canary ReplicaSet replica ratio behind the
+  # existing frontend Service below — no trafficRouting plugin required.
+  strategy:
+    canary:
+      steps:
+        - setWeight: 20
+        - pause: {duration: 1m}
+        - setWeight: 50
+        - pause: {duration: 1m}
+        - setWeight: 100
   template:
     metadata:
       labels:
@@ -70,7 +81,7 @@ spec:
                 - ALL
             privileged: false
             readOnlyRootFilesystem: true
-          image: {{ .Values.images.repository }}/{{ .Values.frontend.name }}:{{ .Values.images.tag | default .Chart.AppVersion }}
+          image: {{ .Values.frontend.image.repository | default .Values.images.repository }}/{{ .Values.frontend.name }}:{{ .Values.frontend.image.tag | default .Values.images.tag | default .Chart.AppVersion }}
           ports:
           - containerPort: 8080
           readinessProbe:

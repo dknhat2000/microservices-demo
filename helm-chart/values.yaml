@@ -119,6 +119,11 @@ frontend:
   name: frontend
   externalService: true
   cymbalBranding: false
+  # Per-service image override for the PoC CI pipeline (falls back to the global images.*
+  # above when unset), so bumping frontend's build doesn't retag the other 10 services.
+  image:
+    repository: ""
+    tag: ""
   # One of: local, gcp, aws, azure, onprem, alibaba. When not set, defaults to "local" unless running in GKE, otherwise auto-sets to gcp.
   platform: local
   singleSharedSession: false

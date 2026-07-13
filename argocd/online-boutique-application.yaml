@@ -1,0 +1,37 @@
+# ArgoCD Application: GitOps pull-based deploy of Online Boutique from the fork's
+# helm-chart/, so a merge to main (including the PoC CI's bot commit bumping
+# frontend's image tag) is the only trigger needed — nothing pushes to the cluster directly.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: online-boutique
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/dknhat2000/microservices-demo.git
+    targetRevision: main
+    path: helm-chart
+    helm:
+      releaseName: online-boutique
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+  # GKE Autopilot's default-resources mutating webhook rewrites container resource
+  # requests/limits (e.g. bumps memory, injects ephemeral-storage) on every apply,
+  # which otherwise causes a permanent diff against git. Not a real drift to act on.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/template/spec/containers/0/resources
+    - group: argoproj.io
+      kind: Rollout
+      jsonPointers:
+        - /spec/template/spec/containers/0/resources

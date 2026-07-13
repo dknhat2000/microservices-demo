@@ -27,3 +27,10 @@ pkg/
 release/wi-kubernetes-manifests.yaml
 vendor/
 gha-creds-*.json
+
+# Local secrets for the DevOps PoC — never commit
+.env
+.env.*
+
+# Ignore nested terraform provider dirs (not just root)
+**/.terraform/
