@@ -54,7 +54,7 @@ jobs:
           IMG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${{ matrix.name }}"
           docker build -t "${IMG}:${TAG}" "${{ matrix.context }}"
       - name: Trivy scan ${{ matrix.name }} (report-only for now; hard gate in Phase 3)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: '${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ matrix.name }}:${{ env.TAG }}'
           format: 'table'
