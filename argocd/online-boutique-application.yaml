@@ -31,3 +31,7 @@ spec:
       kind: Deployment
       jsonPointers:
         - /spec/template/spec/containers/0/resources
+    - group: argoproj.io
+      kind: Rollout
+      jsonPointers:
+        - /spec/template/spec/containers/0/resources
